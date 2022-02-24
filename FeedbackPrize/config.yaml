@@ -1,0 +1,53 @@
+seed: 2022
+gpu_no: 0
+device: cuda
+save_dir: ./saved/holdout/RBL-WCEV2-LRP25-ST384
+
+log:
+  logging: True
+  project: FBP-Holdout
+  entity: ssinyu
+  name: RBL-WCEV2-LRP25-ST384
+  group_name: RoBERTa-Large
+  fold_cont: True
+
+data:
+  data_dir: ./feedback-prize-2021
+  max_length: 512
+  stride: 384
+
+train:
+  n_epoch: 8
+  n_fold: 1
+  n_batch: 10
+  amp: True
+  max_grad_norm: 5
+
+loss:
+  wce: True
+  wce_w: [.1, .4, .4, .6, .6, .8, .8, .8, .8, .9, .9, .6, .6, .4, .4]
+  cce: 1
+  dice: 0
+
+model:
+  name: roberta-large
+
+optimizer:
+  type: Adam
+  learning_rate: .00002
+  min_learning_rate: .000001
+  weight_decay: .000001
+  beta_1: .9
+  beta_2: .98
+
+scheduler:
+  type: ReduceLROnPlateau
+  t_0: 1000
+  t_max: 100
+  factor: .1
+  patience: 1
+  start_factor: .5
+  total_iters: 10
+
+aug:
+  ver: 0
