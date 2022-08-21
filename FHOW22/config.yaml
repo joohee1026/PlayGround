@@ -1,0 +1,47 @@
+seed: 2022
+gpu_number: 1
+device: cuda
+save_dir: ./v1
+mode: train
+
+log:
+  is_log: False
+  project: FHOW-T1
+  entity: ssinyu
+  name: test
+  group_name: tmp
+
+data:
+  data_dir: ../data/task1
+  image_size: 384
+  batch_size: 48
+  n_workers: 4
+
+train:
+  n_fold: 1
+  n_epoch: 100
+  model_name: convnext_base_384_in22ft1k
+  amp: False
+  max_grad_norm: False
+
+loss:
+  wce: False
+  task_weight: [1,1,1]
+
+optimizer:
+  type: adamw
+  learning_rate: .0001
+  min_learning_rate: .000001
+  weight_decay: .00001
+  beta_1: .9
+  beta_2: .98
+
+scheduler:
+  type: CosineAnnealingWarmRestarts
+  t_0: 1000
+  t_mult: 1
+  t_max: 100
+  factor: .1
+  patience: 1
+  start_factor: .5
+  total_iters: 10
