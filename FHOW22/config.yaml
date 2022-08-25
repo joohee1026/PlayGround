@@ -1,47 +1,59 @@
-seed: 2022
-gpu_number: 1
-device: cuda
-save_dir: ./v1
-mode: train
+base:
+  seed: 2022
+  gpu_number: 0
+  device: cuda
+  save_dir: ./saved/tmp
+  mode: train
 
 log:
-  is_log: False
+  wandb: False
   project: FHOW-T1
   entity: ssinyu
-  name: test
-  group_name: tmp
+  name: ConvNeXt-384-test
+  group_name: None
 
 data:
   data_dir: ../data/task1
   image_size: 384
-  batch_size: 48
-  n_workers: 4
+
+model:
+  type: convnext
+  name: convnext_base_384_in22ft1k
+  pretrained: True
 
 train:
   n_fold: 1
+  batch_size: 48
+  n_workers: 4
   n_epoch: 100
   model_name: convnext_base_384_in22ft1k
-  amp: False
+  amp: False            # bug
   max_grad_norm: False
-
+  cutmix_prob: .8
+  
 loss:
   wce: False
-  task_weight: [1,1,1]
+  task_weight: [1,1,1] 
 
 optimizer:
-  type: adamw
-  learning_rate: .0001
-  min_learning_rate: .000001
-  weight_decay: .00001
-  beta_1: .9
-  beta_2: .98
-
+  name: AdamW
+  lr: .0001             # All
+  weight_decay: .0001   # All
+  betas: [.9, .999]     # Adam, AdamW, NAdam, RAdam
+  amsgrad: False        # Adam, AdamW
+  momentum: 0           # SGD, RMSprop
+  momentum_decay: 4e-3  # RAdam
+  nesterov: False       # SGD
+  alpha: .99            # RMSprop
+  
 scheduler:
-  type: CosineAnnealingWarmRestarts
-  t_0: 1000
-  t_mult: 1
-  t_max: 100
-  factor: .1
-  patience: 1
-  start_factor: .5
-  total_iters: 10
+  name: ReduceLROnPlateau
+  last_epoch: -1        # All
+  factor: .1            # ReduceLROnPlateau
+  patience: 10          # ReduceLROnPlateau
+  min_lr: 0             # ReduceLROnPlateau, CosineAnnealingLR, CosineAnnealingWarmRestarts
+  t_0: 100              # CosineAnnealingWarmRestarts
+  t_mult: 1             # CosineAnnealingWarmRestarts
+  t_max: 100            # CosineAnnealingLR
+  step_size: 10         # StepLR
+  gamma: .1             # StepLR
