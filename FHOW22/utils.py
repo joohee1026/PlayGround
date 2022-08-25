@@ -1,120 +1,162 @@
 import os, random
-from pathlib import Path
 
-import pandas as pd
+import yaml
 import numpy as np
 from box import Box
-from sklearn.model_selection import StratifiedKFold
 
 import torch
-import torch.optim as optim
+import torch.nn as nn
+from torch.optim import (
+    SGD, RMSprop, Adam, AdamW, NAdam, RAdam
+)
+from torch.optim.lr_scheduler import (
+    LambdaLR, ReduceLROnPlateau, CosineAnnealingLR, CosineAnnealingWarmRestarts, StepLR, 
+    # ConstantLR, LinearLR, CyclicLR
+)
 
 
-def validate(cfg):
-    assert isinstance(cfg.seed, int)
-    assert isinstance(cfg.gpu_no, int)
-    assert cfg.device in ["cuda", "cpu"]
-    assert cfg.train.n_fold in [1, 4]
+def get_config(config_path:str="config.yaml") -> Box:
+    with open(config_path) as f:
+        config = Box(yaml.load(f, Loader=yaml.FullLoader))
+        config["base"]["config_path"] = config_path
+    
+    return config
 
 
-def fix_seed(seed):
+def fix_seed(seed: int) -> None:
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = True
 
 
+class Validator:
+    def __init__(self, config:Box):
+        assert isinstance(config, Box)
+        self.config = config
 
-def add_fold(cfg: Box, fold_path:str=None) -> pd.DataFrame:
-    if fold_path is None:
-        fold_path = "./train_fold.csv"
+    def main(self):
+        assert isinstance(self.config.base.seed, int)
+        assert isinstance(self.config.base.gpu_number, int)
+        assert self.config.base.device in ("cuda", "cpu")
 
-    if Path(fold_path).is_file():
-        return pd.read_csv(fold_path)
+    def optimizer(self):
+        assert "optimizer" not in self.config.keys()
+        assert self.config.optimizer.name.lower() in \
+            ("sgd", "rmsprop", "adam", "adamw")
 
-    labels = ["Daily", "Gender", "Embellishment"]
-
-    image_dir = os.path.join(cfg.data.data_dir, "train")
-    data_path = os.path.join(cfg.data.data_dir, "info_etri20_emotion_train.csv")
-
-    data = pd.read_csv(data_path)
-    data["image_name"] = image_dir + "/" + data.image_name.map(str)
-    data["uc"] = data[labels].apply(lambda x: f"{x[0]}{x[1]}{x[2]}", axis=1)
-    data["fold"] = 0
-
-    spliter = StratifiedKFold(n_splits=4, shuffle=True, random_state=cfg.seed)
-    uc = data["uc"].values
-    for fold, (_, idx) in enumerate(spliter.split(uc, uc)):
-        data.loc[idx, "fold"] = fold
-
-    data.to_csv(fold_path, index=False)
-    return data
+    def scheduler(self):
+        assert "scheduler" not in self.config.keys()
+        assert self.config.scheduler.name.lower() in \
+            ("lambdalr", "reducelronplateau", "cosineannealinglr",
+             "cosineannealingwarmrestarts", "steplr", "cycliclr",)
 
 
+class SetOptimizer:
+    def __init__(self, config:Box, model:nn.Module):
+        Validator(config).optimizer
+        self.optimizers = {
+            "sgd": self.sgd,
+            "rmsprop": self.rmsprop,
+            "adam": self.adam,
+            "adamw": self.adamw,
+            "nadam": self.nadam,
+            "radam": self.radam
+        }
+        self.model_params = model.parameters()
+        self.load = self.optimizers[config.name.lower()](**config)
 
-def set_optimizer(opt_config, model):
-    opt_name = opt_config.type.lower()
-    if opt_name == "adam":
-        optimizer = optim.Adam(
-            params=model.parameters(),
-            lr=opt_config.learning_rate,
-            betas=(opt_config.beta_1, opt_config.beta_2),
-            weight_decay=opt_config.weight_decay
+    def sgd(self, lr=1e-4, momentum=0, weight_decay=0, nesterov=False, **kwargs):
+        return SGD(
+            params=self.model_params,
+            lr=lr, momentum=momentum, weight_decay=weight_decay, nesterov=nesterov
         )
-    elif opt_name == "adamw":
-        optimizer = optim.AdamW(
-            params=model.parameters(),
-            lr=opt_config.learning_rate,
-            betas=(opt_config.beta_1, opt_config.beta_2),
-            weight_decay=opt_config.weight_decay
-        )
-    elif opt_name == "radam":
-        optimizer = optim.RAdam(
-            params=model.parameters(),
-            lr=opt_config.learning_rate,
-            betas=(opt_config.beta_1, opt_config.beta_2),
-            weight_decay=opt_config.weight_decay
-        )
-    else:
-        raise ValueError
-    return optimizer
 
+    def rmsprop(self, lr=1e-4, momentum=0, alpha=.99, weight_decay=0, **kwargs):
+        return RMSprop(
+            params=self.model_params,
+            lr=lr, momentum=momentum, alpha=alpha, weight_decay=weight_decay
+        )
 
-def set_scheduler(sch_config, opt_config, optimizer):
-    sch_name = sch_config.type.lower()
-    if sch_name == "CosineAnnealingLR".lower():
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            optimizer=optimizer,
-            T_max=sch_config.t_max,
-            eta_min=opt_config.min_learning_rate
+    def adam(self, lr=1e-4, betas=(.9,.999), weight_decay=0, amsgrad=False, **kwargs):
+        return Adam(
+            params=self.model_params,
+            lr=lr, betas=betas, weight_decay=weight_decay, amsgrad=amsgrad
         )
-    elif sch_name == "CosineAnnealingWarmRestarts".lower():
-        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            optimizer=optimizer,
-            T_0=sch_config.t_0,
-            T_mult=sch_config.t_mult
-            eta_min=opt_config.min_learning_rate
+
+    def adamw(self, lr=1e-4, betas=(.9,.999), weight_decay=0, amsgrad=False, **kwargs):
+        return AdamW(
+            params=self.model_params, 
+            lr=lr, betas=betas, weight_decay=weight_decay, amsgrad=amsgrad
         )
-    elif sch_name == "ReduceLROnPlateau".lower():
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer=optimizer,
-            factor=sch_config.factor,
-            patience=sch_config.patience,
-            min_lr=opt_config.min_learning_rate
+    
+    def nadam(self, lr=1e-4, betas=(.9,.999), weight_decay=0, momentum_decay=4e-3, **kwargs):
+        return NAdam(
+            params=self.model_params,
+            lr=lr, betas=betas, weight_decay=weight_decay, momentum_decay=momentum_decay
         )
-    elif sch_name == "LambdaLR".lower():
-        scheduler = optim.lr_scheduler.LambdaLR(
-            optimizer=optimizer,
-            lr_lambda= lambda epoch: 0.9*epoch
+
+    def radam(self, lr=1e-4, betas=(.9,.999), weight_decay=0, **kwargs):
+        return RAdam(
+            params=self.model_params,
+            lr=lr, betas=betas, weight_decay=weight_decay
         )
-    elif sch_name == "LinearLR".lower():
-        scheduler = optim.lr_scheduler.LinearLR(
-            optimizer=optimizer,
-            start_factor=sch_config.start_factor,
-            total_iters=sch_config.total_iters
+    
+
+class SetScheduler:
+    def __init__(self, config:Box, optimizer:torch.optim, lambda_func=None):
+        Validator(config).scheduler
+        self.schedules = {
+            "lambdalr": self.lambdalr,
+            "reducelronplateau": self.reducelronplateau,
+            "cosineannealinglr": self.cosineannealinglr,
+            "cosineannealingwarmrestarts": self.cosineannealingwarmrestarts,
+            "steplr": self.steplr,
+            # "cycliclr": self.cycliclr,
+            # "constantlr": self.constantlr,
+            # "linearlr": self.linearlr
+        }
+        self.optimizer = optimizer
+        self.lambda_func = lambda_func
+        self.load = self.schedules[config.name.lower()](**config)
+
+    def lambdalr(self, last_epoch=-1, **kwargs):
+        return LambdaLR(
+            optimizer=self.optimizer, lr_lambda=self.lambda_func, last_epoch=last_epoch
         )
-    else:
-        scheduler = None
-    return scheduler
+
+    def reducelronplateau(self, mode="min", factor=.1, patience=10, min_lr=0, **kwargs):
+        return ReduceLROnPlateau(
+            optimizer=self.optimizer, 
+            mode=mode, factor=factor, patience=patience, min_lr=min_lr
+        )
+
+    def cosineannealinglr(self, t_max=100, min_lr=0, last_epoch=-1, **kwargs):
+        return CosineAnnealingLR(
+            optimizer=self.optimizer,
+            T_max=t_max, eta_min=min_lr, last_epoch=last_epoch
+        )
+    
+    def cosineannealingwarmrestarts(self, t_0=100, t_mult=1, min_lr=0, last_epoch=-1, **kwargs):
+        return CosineAnnealingWarmRestarts(
+            optimizer=self.optimizer,
+            T_0=t_0, T_mult=t_mult, eta_min=min_lr, last_epoch=last_epoch
+        )
+
+    def steplr(self, step_size=10, gamma=.1, last_epoch=-1, **kwargs):
+        return StepLR(
+            optimizer=self.optimizer, 
+            step_size=step_size, gamma=gamma, last_epoch=last_epoch
+        )
+
+    def cycliclr(self):
+        raise NotImplementedError
+
+    def constantlr(self):
+        raise NotImplementedError
+
+    def linearlr(self):
+        raise NotImplementedError
